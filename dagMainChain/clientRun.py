@@ -71,7 +71,7 @@ nodeTrainAcc = []
 nodeTrainLoss = []
 
 # attention！！！！！！！！！！！！！！！！！！！！！！！
-def main(aim_addr='127.0.0.1'):
+def main(aim_addr='192.168.137.1'):
     if os.path.exists('./clientS'):
         shutil.rmtree('./clientS')
     os.mkdir('./clientS')
@@ -160,9 +160,9 @@ def main(aim_addr='127.0.0.1'):
     ## tensorboard part
     
 
-    ## Exchange the info of selected device with fabric: dict_user_fileHash:QmabPyx31VoTPdwePRDe6vtsKtigepxXmXgBcYhgu7MEDk
+    ## Exchange the info of selected device with fabric: dict_user_fileHash:QmTZqGKUEvD5F8vQyEEJLJB7rzX17tpnN2Uu4YWBRZEYQx
     dict_users_file = "../commonComponent/dict_users.pkl"
-    dict_userf_fileHash = "QmabPyx31VoTPdwePRDe6vtsKtigepxXmXgBcYhgu7MEDk"
+    dict_userf_fileHash = "QmTZqGKUEvD5F8vQyEEJLJB7rzX17tpnN2Uu4YWBRZEYQx"
     while 1:
         dictUserGetStatus, dictUsersttCodeGet = usefulTools.ipfsGetFile(dict_userf_fileHash, dict_users_file)
         print('The filehash of this dict_user is ' + dict_userf_fileHash + ' , and the file is ' + dict_users_file + '!')
@@ -456,4 +456,4 @@ def main(aim_addr='127.0.0.1'):
     # writer.close()
 
 if __name__ == '__main__':
-    main('127.0.0.1')
+    main('192.168.137.1')
