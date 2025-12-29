@@ -1,213 +1,194 @@
-# FedAvg 分布式联邦学习实现
+# FedAvg Sharding Mode
 
-这个文件夹包含FedAvg算法的分布式实现，使用Fabric区块链和IPFS进行通信。
+FedAvg分布式联邦学习的Sharding（分片）模式实现。**完全基于Hyperledger Fabric和IPFS实现去中心化通信**。
 
-## 文件结构
+## ⚠️ 重要提示
 
-- `serverRun.py`: 聚合服务器节点，负责初始化模型、发布任务、聚合客户端模型、发布聚合结果
-- `clientRun.py`: 客户端训练节点，负责查询任务、下载全局模型、本地训练、上传模型
+**FedAvg方法完全基于Fabric+IPFS，无需共享文件系统**：
+- 服务器通过Fabric查询客户端模型（key格式：`deviceID-taskID-epoch`）
+- 所有模型文件存储在IPFS上
+- 所有元数据存储在Fabric区块链上
+- 完全去中心化，支持任意数量的客户端
 
 ## 架构说明
 
-### Server (聚合节点)
-- 初始化genesis模型并上传到IPFS
-- 通过Fabric区块链发布任务
-- 等待客户端上传训练后的模型
-- 使用FedAvg算法聚合模型
-- 将聚合后的模型上传到IPFS并发布到区块链
+**重要**：`serverRun.py` 和 `clientRun.py` **必须在不同的物理节点上运行**。
 
-### Client (客户端节点)
-- 每个客户端节点运行一个独立的进程
-- 查询区块链上的任务信息
-- 从IPFS下载全局聚合模型
-- 使用本地数据训练模型
-- 将训练后的模型上传到IPFS和区块链
+- **服务器节点**：运行 `serverRun.py`
+  - 初始化模型并上传到IPFS
+  - 通过Fabric发布任务
+  - **通过Fabric查询客户端模型**（并行查询）
+  - 从IPFS下载模型文件并聚合
+  - 发布聚合结果到Fabric
 
-## 使用方法
+- **客户端节点**：运行 `clientRun.py`
+  - 通过Fabric查询任务信息
+  - 从IPFS下载全局模型
+  - 本地训练
+  - 上传模型到IPFS
+  - **通过Fabric发布模型信息**（key：`deviceID-taskID-epoch`）
 
-### 1. 启动服务器（聚合节点）
+## 运行方法
 
-#### 场景：3个树莓派，每个负责100个设备，每轮收集30个设备模型
+### 服务器节点
+
+**前置条件**：Fabric网络在服务器节点运行，IPFS daemon已启动
 
 ```bash
-cd fedAvg
-python serverRun.py \
-    --num_users 300 \
-    --frac 0.1 \
-    --epochs 50 \
-    --dataset mnist \
-    --model cnn \
-    --local_ep 5 \
-    --lr 0.01 \
-    --lazy_timeout 120
+cd /home/pi/Sharding-DAG/fedAvg
+python3 serverRun.py --dataset mnist --model cnn --epochs 50 --frac 0.1 --num_users 300
 ```
 
 **参数说明**：
-- `--num_users 300`: 总设备数 = 3个树莓派 × 100个设备/树莓派
-- `--frac 0.1`: 每轮参与比例，服务器会收集 300 × 0.1 = 30个设备模型
-- `--lazy_timeout 120`: 等待客户端上传模型的超时时间（秒）
-
-服务器会：
-1. 初始化模型
-2. 上传genesis模型到IPFS
-3. 发布任务到区块链
-4. 等待客户端训练并聚合模型
-
-### 2. 启动客户端（训练节点）
-
-#### 方式一：每个树莓派负责固定的设备范围（推荐用于多树莓派部署）
-
-假设有3个树莓派，每个树莓派负责100个设备：
-
-**树莓派1（node_id=0）**：
-```bash
-cd fedAvg
-python clientRun.py \
-    --node_id 0 \
-    --devices_per_node 100 \
-    --num_users 300 \
-    --frac 0.1 \
-    --dataset mnist \
-    --model cnn \
-    --epochs 50
-```
-负责设备：device00000 到 device00099，每轮选择10个设备
-
-**树莓派2（node_id=1）**：
-```bash
-cd fedAvg
-python clientRun.py \
-    --node_id 1 \
-    --devices_per_node 100 \
-    --num_users 300 \
-    --frac 0.1 \
-    --dataset mnist \
-    --model cnn \
-    --epochs 50
-```
-负责设备：device00100 到 device00199，每轮选择10个设备
-
-**树莓派3（node_id=2）**：
-```bash
-cd fedAvg
-python clientRun.py \
-    --node_id 2 \
-    --devices_per_node 100 \
-    --num_users 300 \
-    --frac 0.1 \
-    --dataset mnist \
-    --model cnn \
-    --epochs 50
-```
-负责设备：device00200 到 device00299，每轮选择10个设备
-
-**说明**：
-- `--node_id`: 树莓派节点ID（0, 1, 2, ...）
-- `--devices_per_node`: 每个树莓派负责的设备数（默认100）
-- 每个树莓派从自己的设备范围内随机选择 `frac * devices_per_node` 个设备
-- 服务器会收集所有树莓派上传的模型（理论上每轮30个设备）
-
-#### 方式二：每个树莓派从全部设备中随机选择（默认行为）
-
-```bash
-cd fedAvg
-python clientRun.py \
-    --num_users 300 \
-    --frac 0.033 \
-    --dataset mnist \
-    --model cnn \
-    --epochs 50
-```
-
-**重要**：如果不指定`--node_id`，客户端会从全部设备中随机选择
-
-### 3. 参数说明
-
-服务器和客户端共享的参数（通过args_parser）：
 - `--dataset`: 数据集类型 (mnist/cifar)
 - `--model`: 模型类型 (cnn/mlp)
 - `--epochs`: 训练轮数
-- `--num_users`: 总用户数（服务器端：所有设备总数；客户端：必须与服务器一致）
-- `--frac`: 每轮参与的客户端比例
-  - 服务器端：从全部设备中选择的比例（例如：300 × 0.1 = 30个设备）
-  - 客户端（使用--node_id时）：从当前节点负责的设备中选择的比例（例如：100 × 0.1 = 10个设备）
-- `--node_id`: 树莓派节点ID（0, 1, 2, ...），仅客户端使用
-- `--devices_per_node`: 每个树莓派负责的设备数（默认100），仅客户端使用
-- `--iid`: 是否IID数据分布
-- `--local_ep`: 本地训练epoch数
-- `--lr`: 学习率
-- `--attack_type`: 攻击类型 (none/lazy/noise/labelflip/delay)
-- `--malicious_frac`: 恶意节点比例
-- `--lazy_timeout`: 等待客户端的超时时间（秒）
+- `--frac`: 每轮参与的客户端比例（默认0.1）
+- `--num_users`: **总用户数量**（所有shard的总和）
 
-## 工作流程
+**重要**：
+- 服务器不需要指定`shard_id`，会自动聚合所有客户端模型
+- `--num_users`应设置为所有shard的用户总数
 
-1. **服务器初始化**
-   - 创建模型
-   - 上传genesis模型到IPFS
-   - 保存dict_users到文件
+### 客户端节点
 
-2. **任务发布**
-   - 服务器通过Fabric区块链发布任务
-   - 任务包含：taskID, epochs, status, usersFrac
+**前置条件**：可以访问Fabric网络和IPFS
 
-3. **客户端训练**
-   - 客户端查询任务
-   - 下载全局模型（从IPFS）
-   - 本地训练
-   - 上传模型到IPFS
-   - 发布模型哈希到区块链
-
-4. **服务器聚合**
-   - 查询区块链获取所有客户端模型
-   - 从IPFS下载模型文件
-   - 使用FedAvg聚合
-   - 上传聚合模型到IPFS
-   - 发布聚合结果到区块链
-
-5. **重复步骤3-4**直到所有epoch完成
-
-## 目录结构
-
-运行后会在以下位置生成文件：
-
-```
-fedAvg/
-├── serverS/          # 服务器端文件
-│   ├── paras/        # 模型参数
-│   │   ├── local/    # 客户端模型
-│   │   └── agg/      # 聚合模型
-│   └── genesis_model.pkl
-│
-└── clientS/          # 客户端文件（每个节点）
-    ├── paras/        # 下载的聚合模型
-    └── local/        # 本地训练的模型
+```bash
+# 设置shard_id（通过环境变量或命令行参数）
+export SHARD_ID=0
+cd /home/pi/Sharding-DAG/fedAvg
+python3 clientRun.py --dataset mnist --model cnn
 ```
 
-结果文件保存在：
+**如果Fabric在远程服务器，使用SSH隧道**：
+```bash
+# 在单独终端运行（保持运行）
+ssh -L 7051:localhost:7051 -L 9051:localhost:9051 -L 7050:localhost:7050 pi@192.168.137.208
+
+# 在另一个终端运行
+export SHARD_ID=0
+python3 clientRun.py --dataset mnist --model cnn --fabric_host localhost
 ```
-data/result/
-├── fedavg-{attack}-{mal_frac}-{timestamp}.csv
-└── fedavg-{attack}-{mal_frac}-{timestamp}_loss.csv
+
+**参数说明**：
+- `--shard_id`: Shard ID（必需，可通过环境变量`SHARD_ID`或命令行参数指定）
+- `--fabric_host`: Fabric网络地址（可选，默认`192.168.137.208`）
+
+## 前置条件
+
+### 1. 环境变量（仅客户端需要）
+
+```bash
+# 客户端节点设置shard_id
+echo 'export SHARD_ID=0' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-## 注意事项
+### 2. dict_users文件
 
-1. **IPFS和Fabric网络**：确保IPFS daemon和Fabric网络已启动
-2. **设备ID**：每个客户端节点必须使用唯一的device_id
-3. **dict_users**：服务器和客户端必须使用相同的dict_users文件（通过commonComponent/dict_users.pkl共享）
-4. **网络连接**：确保所有节点可以访问IPFS和Fabric网络
-5. **超时设置**：根据网络情况调整lazy_timeout参数
+```bash
+cd federatedLearning
+python3 generate_shard_dict_users.py
+```
 
-## 与main_fed_baseline.py的区别
+生成的文件需要复制到所有节点：
+- `commonComponent/dict_users_mnist_shard0.pkl` (用户ID: 0-99)
+- `commonComponent/dict_users_mnist_shard1.pkl` (用户ID: 100-199)
+- `commonComponent/dict_users_mnist_shard2.pkl` (用户ID: 200-299)
 
-- `main_fed_baseline.py`: 中心化实现，在单进程中模拟所有客户端
-- `fedAvg/`: 分布式实现，客户端和服务器分离，支持多节点部署
+### 3. IPFS和Fabric网络
 
-## 故障排查
+**IPFS配置**：
+- 确保IPFS daemon已启动（可以在服务器或客户端节点上）
+- 所有模型文件存储在IPFS上
 
-1. **客户端无法连接**：检查IPFS和Fabric网络是否正常运行
-2. **模型下载失败**：检查IPFS哈希是否正确，IPFS daemon是否运行
-3. **任务查询超时**：检查Fabric网络连接
-4. **设备ID冲突**：确保每个客户端使用不同的device_id
+**Fabric网络配置**：
 
+1. **推荐方案：Fabric在服务器节点运行，客户端直接连接**
+   ```bash
+   # 服务器节点（192.168.137.208）
+   cd /home/pi/fabric/fabric-samples/test-network
+   ./network.sh up createChannel -ca
+   cd /home/pi/Sharding-DAG
+   ./start_mycc_network.sh
+   
+   # 客户端节点：配置/etc/hosts
+   sudo bash -c 'echo "192.168.137.208 peer0.org1.example.com peer0.org2.example.com orderer.example.com" >> /etc/hosts'
+   ```
+
+2. **替代方案：使用SSH隧道（推荐用于测试）**
+   ```bash
+   # 在客户端节点上创建SSH隧道（保持运行）
+   ssh -L 7051:localhost:7051 -L 9051:localhost:9051 -L 7050:localhost:7050 pi@192.168.137.208
+   ```
+
+## 工作原理
+
+**完全基于Fabric+IPFS的去中心化架构**：
+
+1. **任务发布**：服务器通过Fabric发布任务（key: `taskRelease`），客户端查询
+2. **模型上传**：客户端训练后上传到IPFS，通过Fabric发布（key: `deviceID-taskID-epoch`）
+3. **模型收集**：服务器通过Fabric并行查询所有设备，从IPFS下载模型文件
+4. **结果发布**：服务器聚合后上传到IPFS，通过Fabric发布（key: `taskID`）
+
+**Fabric Key设计**：
+- `taskRelease`: 任务发布信息（全局唯一）
+- `taskID`: 任务信息（每个任务一个key）
+- `deviceID-taskID-epoch`: 设备模型信息（每个设备每个任务每个epoch唯一）
+
+**关键特性**：
+- ✅ 完全去中心化：无需共享文件系统
+- ✅ 并行查询：多线程并行查询提高效率
+- ✅ 容错机制：IPFS下载失败自动重试，Fabric查询失败自动跳过
+
+## 部署示例
+
+**服务器节点（192.168.137.208）**：
+```bash
+# 启动Fabric网络
+cd /home/pi/fabric/fabric-samples/test-network
+./network.sh up createChannel -ca
+cd /home/pi/Sharding-DAG
+./start_mycc_network.sh
+
+# 启动IPFS daemon
+ipfs daemon &
+
+# 启动服务器
+cd /home/pi/Sharding-DAG/fedAvg
+python3 serverRun.py --dataset mnist --model cnn --epochs 50 --frac 0.1 --num_users 100
+```
+
+**客户端节点（alice）**：
+```bash
+# 配置/etc/hosts（如果直接连接）
+sudo bash -c 'echo "192.168.137.208 peer0.org1.example.com peer0.org2.example.com orderer.example.com" >> /etc/hosts'
+
+# 运行客户端
+export SHARD_ID=0
+cd /home/pi/Sharding-DAG/fedAvg
+python3 clientRun.py --dataset mnist --model cnn
+```
+
+**重要提示**：
+- 先启动服务器节点，再启动客户端节点
+- 每个节点只运行一个程序（服务器运行serverRun.py，客户端运行clientRun.py）
+- 所有节点必须可以访问IPFS和Fabric网络
+- **完全去中心化**：无需共享文件系统，所有通信通过Fabric+IPFS
+
+## 与DAG方法的对比
+
+| 特性 | DAG方法 | FedAvg方法 |
+|-----|---------|-----------|
+| 通信方式 | Socket + Fabric | **完全Fabric** |
+| 模型存储 | IPFS | IPFS |
+| 元数据存储 | Socket + Fabric | Fabric |
+| 去中心化 | 部分（需要socket） | **完全去中心化** |
+| 文件系统依赖 | 部分 | **无** |
+
+**优势**：
+- ✅ 完全去中心化：无需Socket连接
+- ✅ 更好的可扩展性：支持任意数量的客户端
+- ✅ 更强的容错性：单个客户端故障不影响整体
+- ✅ 数据一致性：所有数据存储在Fabric区块链上

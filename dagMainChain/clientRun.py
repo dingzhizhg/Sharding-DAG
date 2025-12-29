@@ -14,7 +14,6 @@ import random
 import subprocess
 import pickle
 import pandas as pd
-import shlex
 
 # Common Components
 sys.path.append('../commonComponent')
@@ -141,6 +140,24 @@ def main(aim_addr='192.168.137.208'):
     allDeviceName = []
     for i in range(args.num_users):
         allDeviceName.append("device"+("{:0>5d}".format(i)))
+    deviceSelected = []
+
+    # Randomly select the devices
+
+    # m = max(int(args.frac * args.num_users), 1) # args.frac is the fraction of users
+    # idxs_users = np.random.choice(range(args.num_users), m, replace=False)
+
+    # print('\n**************************** Idxs of selected devices *****************************')
+    # print('The idxs of selected devices are\n', idxs_users)
+    # print('*************************************************************************************\n')
+
+    # ## Exchange the info of selected device with fabric
+    # with open('../commonComponent/selectedDeviceIdxs.txt', 'wb') as f:
+    #     pickle.dump(idxs_users, f)
+
+    idxs_users = [ 5, 56, 76, 78, 68, 25, 47, 15, 61, 55]
+    # idxs_users = [60, 37, 27, 70, 79, 34, 18, 88, 57, 98]
+    # idxs_users = [48, 46, 33, 82,  4,  7,  6, 91, 92, 52]
 
     dateNow = datetime.datetime.now().strftime('%m%d%H%M%S')  # 简短时间戳：月日时分秒
 
@@ -215,19 +232,15 @@ def main(aim_addr='192.168.137.208'):
     with open(dict_users_file, 'rb') as f:
         dict_users = pickle.load(f)
 
+    for idx in idxs_users:
+        deviceSelected.append(allDeviceName[idx])
+    print('\n**************************** Selected devices *****************************')
+    print('The idxs of selected devices are\n', deviceSelected)
+    print('*****************************************************************************\n')
+
     # main loop
     while 1:
         print('\n\n\n**************************** Iteration %d *****************************'%iteration_count)
-        
-        # Randomly select devices for this iteration
-        m = max(int(args.frac * args.num_users), 1)  # args.frac is the fraction of users
-        idxs_users = np.random.choice(range(args.num_users), m, replace=False)
-        deviceSelected = [allDeviceName[idx] for idx in idxs_users]
-        
-        print('\n**************************** Selected devices for this iteration *****************************')
-        print('Device indices: ', idxs_users.tolist())
-        print('Device IDs: ', deviceSelected)
-        print('**********************************************************************************************\n')
         # init the task ID
         taskID = 'task'+str(random.randint(1,10))+str(random.randint(1,10))+str(random.randint(1,10))+str(random.randint(1,10))
 
@@ -316,13 +329,10 @@ def main(aim_addr='192.168.137.208'):
         basic_acc_list.append(basicModelAcc)
         basicAccDf = pd.DataFrame({'shard_{}'.format(nodeNum):basic_acc_list})
         
-        # Generate simplified filename: method-dataset-attack-malFrac-timestamp
+        # Generate simplified filename: method-attack-malFrac-timestamp
         attack_str = args.attack_type if hasattr(args, 'attack_type') and args.attack_type != 'none' else 'none'
         mal_frac_str = f"{args.malicious_frac:.1f}" if hasattr(args, 'malicious_frac') and args.malicious_frac > 0 else "0.0"
-        # Map dataset name: 'cifar' -> 'cifar10' for filename
-        dataset_raw = args.dataset if hasattr(args, 'dataset') else 'mnist'
-        dataset_str = 'cifar10' if dataset_raw == 'cifar' else dataset_raw
-        filename_base = "dag-{}-{}-{}-{}".format(dataset_str, attack_str, mal_frac_str, dateNow)
+        filename_base = "dag-{}-{}-{}".format(attack_str, mal_frac_str, dateNow)
         basicAccDf.to_csv("../data/{}_basic.csv".format(filename_base), index=False, sep=',')
 
         # Add the paras file of base model to ipfs network for shard training
@@ -341,12 +351,8 @@ def main(aim_addr='192.168.137.208'):
         taskEpochs = args.epochs
         taskInitStatus = "start"
         taskUsersFrac = args.frac
-        # Convert device list to JSON array format for shell script
-        # Use shlex.quote to properly escape the JSON string for shell
-        deviceListJson = json.dumps([int(d.replace('device', '')) for d in deviceSelected])
-        deviceListJsonEscaped = shlex.quote(deviceListJson)
         while 1:
-            taskRelease = subprocess.Popen(args=['../commonComponent/interRun.sh release '+taskID+' '+str(taskEpochs)+' '+taskInitStatus+' '+str(taskUsersFrac)+' '+deviceListJsonEscaped], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
+            taskRelease = subprocess.Popen(args=['../commonComponent/interRun.sh release '+taskID+' '+str(taskEpochs)+' '+taskInitStatus+' '+str(taskUsersFrac)], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
             trOuts, trErrs = taskRelease.communicate(timeout=10)
             if taskRelease.poll() == 0:
                 print('*** ' + taskID + ' has been released! ***')
@@ -411,12 +417,6 @@ def main(aim_addr='192.168.137.208'):
             
             # Query nodes with timeout (only for non-lazy nodes)
             start_time = time.time()
-            # flagSet在epoch循环内但在内层等待循环外：
-            # - 同一个epoch内：不会重置，避免重复查询已成功的device
-            # - 不同epoch之间：会重置，允许重新查询（因为文件名包含epoch号，是不同的文件）
-            flagSet = set()
-            lock = threading.Lock()
-            
             while (len(flagList) != 0):
                 elapsed = time.time() - start_time
                 if elapsed >= args.lazy_timeout:
@@ -424,51 +424,25 @@ def main(aim_addr='192.168.137.208'):
                     print(f"Remaining nodes (possibly lazy or slow): {flagList}")
                     break
                 
-                # 先检查哪些device已经有文件了（避免重复查询）
-                devices_to_query = []
+                flagSet = set()
+                ts = []
+                lock = threading.Lock()
                 for deviceID in flagList:
                     localFileName = './clientS/paras/local/' + taskID + '-' + deviceID + '-epoch-' + str(currentEpoch) + '.pkl'
-                    if os.path.exists(localFileName):
-                        # 文件已存在，直接标记为成功
-                        flagSet.add(deviceID)
-                        print(f"Model file already exists for {deviceID}, skipping query")
-                    else:
-                        devices_to_query.append(deviceID)
-                
-                # 更新flagList，移除已有文件的device
-                flagList = flagList - flagSet
-                
-                # 如果没有需要查询的device，退出循环
-                if len(devices_to_query) == 0:
-                    break
-                
-                # 只查询还没有文件的device
-                ts = []
-                for deviceID in devices_to_query:
-                    localFileName = './clientS/paras/local/' + taskID + '-' + deviceID + '-epoch-' + str(currentEpoch) + '.pkl'
-                    # 使用较小的timeout，避免单个查询占用太长时间
-                    query_timeout = min(30, args.lazy_timeout - elapsed)  # 每次查询最多30秒
-                    if query_timeout <= 0:
-                        break
                     t = threading.Thread(
                         target=usefulTools.queryLocal,
                         args=(lock, taskID, deviceID, currentEpoch, flagSet, localFileName,),
-                        kwargs={'timeout': query_timeout}
+                        kwargs={'timeout': args.lazy_timeout}
                     )
                     t.start()
                     ts.append(t)
                 
-                # Wait for threads with reasonable timeout
+                # Wait for threads with timeout
                 for t in ts:
-                    remaining_time = max(1, args.lazy_timeout - elapsed)  # 至少等待1秒
-                    t.join(timeout=min(remaining_time, 30))  # 每个线程最多等待30秒
+                    t.join(timeout=args.lazy_timeout - elapsed)
                 
-                # 更新flagList，移除已成功的device
+                time.sleep(2)
                 flagList = flagList - flagSet
-                
-                # 如果还有device未完成，短暂等待后继续
-                if len(flagList) > 0:
-                    pass
             
             # Load all successfully retrieved models
             for deviceID in deviceSelected:

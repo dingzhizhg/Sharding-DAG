@@ -80,6 +80,20 @@ if __name__ == '__main__':
     if 'delay' in args.attack_type:
         delay_manager = DelayAttackManager()
 
+    # 初始化CSV文件（如果不存在则创建并写入头部信息）
+    os.makedirs('../data', exist_ok=True)
+    attack_str = args.attack_type if args.attack_type != 'none' else 'none'
+    mal_frac_str = f"{args.malicious_frac:.1f}" if args.malicious_frac > 0 else "0.0"
+    csv_filename = '../data/dag-{}-{}-{}_basic.csv'.format(
+        attack_str, mal_frac_str, args.dataset
+    )
+    # 如果文件不存在，创建并写入头部信息
+    if not os.path.exists(csv_filename):
+        with open(csv_filename, 'w') as f:
+            f.write('dataset: {}\n'.format(args.dataset))  # 第一行是数据集信息
+            f.write('shard_1\n')  # 第二行是shard名称
+        print('Created CSV file: %s' % csv_filename)
+
     iteration = 0
     while 1:
         taskRelInfo = {}
@@ -87,22 +101,10 @@ if __name__ == '__main__':
         while 1:
             taskRelQue, taskRelQueStt = usefulTools.simpleQuery('taskRelease')
             if taskRelQueStt == 0:
-                try:
-                    # Try to parse JSON, handle potential formatting issues
-                    taskRelQue_clean = taskRelQue.strip()
-                    taskRelInfo = json.loads(taskRelQue_clean)
-                    print('\n*************************************************************************************')
-                    print('Latest task release status is %s!'%taskRelQue_clean)
-                    print('*************************************************************************************\n')
-                    break
-                except json.JSONDecodeError as e:
-                    print(f"JSON decode error: {e}")
-                    print(f"Raw query result: {repr(taskRelQue)}")
-                    print(f"Query result length: {len(taskRelQue)}")
-                    print(f"First 100 chars: {taskRelQue[:100]}")
-                    print("Retrying query...")
-                    time.sleep(2)
-                    continue
+                taskRelInfo = json.loads(taskRelQue)
+                print('\n*************************************************************************************')
+                print('Latest task release status is %s!'%taskRelQue.strip())
+                break
         taskRelEpoch = int(taskRelInfo['epoch'])
         
         # task info template {"epoch":"0","status":training,"paras":"QmSaAhKsxELzzT1uTtnuBacgfRjhehkzz3ybwnrkhJDbZ2"}
@@ -123,41 +125,6 @@ if __name__ == '__main__':
             print('\n******************************* Iteration #%d starting ********************************'%iteration+'\n')
             print('Iteration %d starting!'%iteration)
             print('\n*************************************************************************************\n')
-            
-            # 从任务信息中读取设备列表（由聚合节点发布）
-            ## init the list of device name
-            allDeviceName = []
-            for i in range(args.num_users):
-                allDeviceName.append("device"+("{:0>5d}".format(i)))
-            
-            # 从taskRelease信息中读取设备列表
-            if 'deviceList' in taskRelInfo:
-                # 设备列表以索引数组形式存储，转换为Python list
-                idxs_users = list(taskRelInfo['deviceList'])  # 转换为list，避免numpy array的布尔值问题
-                deviceSelected = [allDeviceName[idx] for idx in idxs_users]
-                print('\n**************************** Selected devices from task (read from blockchain) *****************************')
-                print('Device indices: ', idxs_users)
-                print('Device IDs: ', deviceSelected)
-                print('**********************************************************************************************\n')
-            else:
-                # 如果没有设备列表（向后兼容），使用随机选择
-                print('Warning: No deviceList in taskRelease, falling back to random selection')
-                m = max(int(args.frac * args.num_users), 1)
-                idxs_users = np.random.choice(range(args.num_users), m, replace=False).tolist()  # 转换为list
-                deviceSelected = [allDeviceName[idx] for idx in idxs_users]
-                print('\n**************************** Selected devices for this iteration (random fallback) *****************************')
-                print('Device indices: ', idxs_users)
-                print('Device IDs: ', deviceSelected)
-                print('**********************************************************************************************\n')
-            
-            # Select malicious nodes for this iteration (based on selected devices)
-            malicious_nodes = select_malicious_nodes(
-                idxs_users, 
-                args.malicious_frac, 
-                args.attack_type,
-                seed=args.seed if hasattr(args, 'seed') else None
-            )
-            
             currentEpoch = int(taskInfo['epoch']) + 1
             loss_train = []
             acc_test_list = []  # 存储每个epoch的测试准确率
@@ -200,8 +167,28 @@ if __name__ == '__main__':
                     acc_test_list.append(acc_test_value)
                     print('Epoch %d test accuracy: %.2f%%' % (currentEpoch - 1, acc_test_value))
 
-                # 使用在iteration开始时选择的设备列表（idxs_users和malicious_nodes已经在iteration开始时确定）
-                # 在整个iteration的所有epoch中都使用相同的设备集合
+                # Device name list
+                # with open('../commonComponent/selectedDeviceIdxs.txt', 'rb') as f:
+                #     idxs_users = pickle.load(f)
+
+                idxs_users = [ 5, 56, 76, 78, 68, 25, 47, 15, 61, 55]
+
+                ## init the list of device name
+                allDeviceName = []
+                for i in range(args.num_users):
+                    allDeviceName.append("device"+("{:0>5d}".format(i)))
+
+                # Select malicious nodes for this round
+                malicious_nodes = select_malicious_nodes(
+                    idxs_users, 
+                    args.malicious_frac, 
+                    args.attack_type,
+                    seed=args.seed if hasattr(args, 'seed') else None
+                )
+
+                # print('\n**************************** All devices *****************************')
+                # print(allDeviceName)
+                # print('*************************************************************************************\n')
 
                 loss_locals = []
                 for idx in idxs_users:
@@ -306,32 +293,22 @@ if __name__ == '__main__':
                 currentEpoch += 1
 
             # 计算最后一个epoch的准确率
-            # 等待最后一个epoch的聚合模型（优化等待逻辑）
+            # 等待最后一个epoch的聚合模型（添加超时机制）
             print(f"Waiting for final epoch {taskRelEpoch} aggregation model...")
             start_wait_time = time.time()
-            max_wait_time = args.lazy_timeout  # 减少等待时间到1倍lazy_timeout
+            max_wait_time = args.lazy_timeout * 2  # 允许更长的等待时间（2倍lazy_timeout）
             final_model_loaded = False
-            last_epoch_seen = -1
-            last_status_seen = ''
             
             while (time.time() - start_wait_time) < max_wait_time:
                 taskInQueFinal, taskInQueFinalStt = usefulTools.simpleQuery(taskID)
                 if taskInQueFinalStt == 0:
                     taskInfoFinal = json.loads(taskInQueFinal)
-                    current_epoch = int(taskInfoFinal.get('epoch', -1))
-                    current_status = taskInfoFinal.get('status', 'unknown')
-                    
-                    # 检查是否已完成
-                    if current_status == 'done':
-                        # 如果已经通过epoch匹配获取了模型，直接退出
-                        if final_model_loaded:
-                            print(f"Status is 'done', final model already tested.")
-                            break
-                        
+                    # 检查是否已完成（status为done）或者epoch匹配
+                    if taskInfoFinal.get('status') == 'done' or int(taskInfoFinal['epoch']) == taskRelEpoch:
                         # 下载最后一个epoch的聚合模型
                         finalAggModelFile = './data/paras/aggModel-iter-' + str(iteration) + '-epoch-' + str(taskRelEpoch) + '-final.pkl'
                         download_start = time.time()
-                        while (time.time() - download_start) < 30:  # 下载超时30秒（减少）
+                        while (time.time() - download_start) < 60:  # 下载超时60秒
                             finalAggModel, finalAggModelStt = usefulTools.ipfsGetFile(taskInfoFinal['paras'], finalAggModelFile)
                             if finalAggModelStt == 0:
                                 # 加载模型并计算最后一个epoch的准确率
@@ -346,6 +323,7 @@ if __name__ == '__main__':
                                     break
                                 except Exception as e:
                                     print(f"Error loading final model: {e}")
+                                    time.sleep(2)
                             else:
                                 time.sleep(1)
                         
@@ -354,84 +332,27 @@ if __name__ == '__main__':
                         else:
                             print(f"Warning: Failed to download/load final model, continuing...")
                             break
-                    # 检查epoch是否匹配（但status还不是done）
-                    elif current_epoch == taskRelEpoch:
-                        # epoch匹配，尝试下载并测试模型（即使status还不是done）
-                        elapsed = time.time() - start_wait_time
-                        if current_epoch != last_epoch_seen or current_status != last_status_seen:
-                            print(f"Epoch {current_epoch} reached (status: {current_status}), downloading and testing model...")
-                            last_epoch_seen = current_epoch
-                            last_status_seen = current_status
-                        
-                        # 尝试下载并测试当前epoch的模型
-                        if not final_model_loaded:
-                            finalAggModelFile = './data/paras/aggModel-iter-' + str(iteration) + '-epoch-' + str(taskRelEpoch) + '-final.pkl'
-                            finalAggModel, finalAggModelStt = usefulTools.ipfsGetFile(taskInfoFinal['paras'], finalAggModelFile)
-                            if finalAggModelStt == 0:
-                                # 加载模型并计算最后一个epoch的准确率
-                                try:
-                                    net_glob.load_state_dict(torch.load(finalAggModelFile))
-                                    net_glob.eval()
-                                    acc_test_final, loss_test_final = test_img(net_glob, dataset_test, args)
-                                    acc_test_final_value = acc_test_final.cpu().numpy().tolist()
-                                    acc_test_list.append(acc_test_final_value)
-                                    print('Final epoch %d test accuracy: %.2f%%' % (taskRelEpoch, acc_test_final_value))
-                                    final_model_loaded = True
-                                    # 如果status还不是done，继续等待status变成done（但已经获取了准确率）
-                                    if current_status != 'done':
-                                        print(f"Model tested, but status is still '{current_status}', waiting for 'done'...")
-                                except Exception as e:
-                                    print(f"Error loading final model: {e}")
-                        
-                        # 如果已经获取了模型，但status还不是done，继续等待
-                        if final_model_loaded and current_status != 'done':
-                            time.sleep(3)
-                        elif not final_model_loaded:
-                            time.sleep(3)  # 如果还没获取到模型，继续等待
-                        else:
-                            # 已经获取了模型且status是done，退出
-                            break
                     else:
-                        # epoch还没到，继续等待
                         elapsed = time.time() - start_wait_time
-                        if current_epoch != last_epoch_seen or current_status != last_status_seen:
-                            print(f"Waiting for final epoch... (current epoch: {current_epoch}, status: {current_status}, elapsed: {elapsed:.1f}s)")
-                            last_epoch_seen = current_epoch
-                            last_status_seen = current_status
-                        time.sleep(3)  # 减少sleep时间从5秒到3秒
+                        print(f"Waiting for final epoch... (current epoch: {taskInfoFinal.get('epoch', 'unknown')}, status: {taskInfoFinal.get('status', 'unknown')}, elapsed: {elapsed:.1f}s)")
+                        time.sleep(5)
                 else:
-                    # 查询失败，短暂等待后重试
-                    elapsed = time.time() - start_wait_time
-                    if elapsed % 10 < 3:  # 每10秒打印一次
-                        print(f"Query failed, retrying... (elapsed: {elapsed:.1f}s)")
-                    time.sleep(2)  # 减少sleep时间从5秒到2秒
+                    time.sleep(5)
             
             if not final_model_loaded:
                 print(f"Warning: Timeout waiting for final epoch {taskRelEpoch} model after {max_wait_time:.1f}s, continuing without final accuracy...")
 
             checkTaskID = taskID
             
-            # 保存准确率到CSV文件（已禁用，不需要local-开头的文件）
-            # if len(acc_test_list) > 0:
-            #     # 确保data目录存在（项目根目录下的data文件夹）
-            #     os.makedirs('../data', exist_ok=True)
-            #     
-            #     # 生成文件名：格式与示例文件一致 dag-{attack}-{mal_frac}-{timestamp}_basic.csv
-            #     attack_str = args.attack_type if args.attack_type != 'none' else 'none'
-            #     mal_frac_str = f"{args.malicious_frac:.1f}" if args.malicious_frac > 0 else "0.0"
-            #     timestamp = int(time.time())
-            #     csv_filename = '../data/local-{}-{}-{}_basic.csv'.format(
-            #         attack_str, mal_frac_str, timestamp
-            #     )
-            #     
-            #     # 按照示例CSV格式保存：第一行是shard名称，后面每行是准确率值
-            #     with open(csv_filename, 'w') as f:
-            #         f.write('shard_1\n')  # 第一行是shard名称
-            #         for acc in acc_test_list:
-            #             f.write(str(acc) + '\n')
-            #     
-            #     print('\nAccuracy results saved to: %s' % csv_filename)
-            #     print('Total epochs: %d' % len(acc_test_list))
+            # 保存准确率到CSV文件（追加模式）
+            if len(acc_test_list) > 0:
+                # 追加准确率值到文件
+                with open(csv_filename, 'a') as f:
+                    for acc in acc_test_list:
+                        f.write(str(acc) + '\n')
+                
+                print('\nAccuracy results appended to: %s' % csv_filename)
+                print('Iteration %d: Added %d epoch(s) accuracy values' % (iteration, len(acc_test_list)))
             
             print('\n*********************************** Iteration #%d ***********************************'%iteration+'\n')
             print('Current iteration %d has been completed!'%iteration)

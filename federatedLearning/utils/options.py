@@ -65,5 +65,13 @@ def args_parser():
     parser.add_argument('--devices_per_node', type=int, default=100,
                         help='Number of devices per node (default: 100). Used with --node_id to determine device range.')
     
+    # Sharding arguments
+    parser.add_argument('--shard_id', type=int, default=None,
+                        help='Shard ID for distributed training (0, 1, 2, ...). If specified, loads shard-specific user split file.')
+    
+    # Network arguments
+    parser.add_argument('--fabric_host', type=str, default=None,
+                        help='Fabric network host address (e.g., 192.168.137.208). If not specified, uses FABRIC_HOST environment variable or localhost')
+    
     args = parser.parse_args()
     return args

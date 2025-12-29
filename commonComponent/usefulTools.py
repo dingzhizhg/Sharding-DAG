@@ -7,23 +7,32 @@ import time
 import subprocess
 
 # two ipfs functions, understand
-def ipfsGetFile(hashValue, fileName):
+def ipfsGetFile(hashValue, fileName, timeout=60):
     """
     Use hashValue to download the file from IPFS network.
+    
+    Args:
+        hashValue: IPFS hash of the file
+        fileName: Local file path to save the downloaded file
+        timeout: Download timeout in seconds (default 60s for distributed networks)
     """
     ipfsGet = subprocess.Popen(args=['ipfs get ' + hashValue + ' -o ' + fileName], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
-    outs, errs = ipfsGet.communicate(timeout=10)
+    outs, errs = ipfsGet.communicate(timeout=timeout)
     if ipfsGet.poll() == 0:
         return outs.strip(), ipfsGet.poll()
     else:
         return errs.strip(), ipfsGet.poll()
 
-def ipfsAddFile(fileName):
+def ipfsAddFile(fileName, timeout=60):
     """
     Upload the file to IPFS network and return the exclusive fileHash value.
+    
+    Args:
+        fileName: Local file path to upload
+        timeout: Upload timeout in seconds (default 60s for distributed networks)
     """
     ipfsAdd = subprocess.Popen(args=['ipfs add ' + fileName + ' | tr \' \' \'\\n\' | grep Qm'], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
-    outs, errs = ipfsAdd.communicate(timeout=10)
+    outs, errs = ipfsAdd.communicate(timeout=timeout)
     if ipfsAdd.poll() == 0:
         return outs.strip(), ipfsAdd.poll()
     else:
@@ -43,7 +52,9 @@ def queryLocal(lock, taskID, deviceID, currentEpoch, flagSet, localFileName, tim
         timeout: 超时时间（秒），默认15秒
     """
     try:
-        localQuery = subprocess.Popen(args=['../commonComponent/interRun.sh query '+deviceID], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
+        # Use the correct key format: deviceID-taskID-epoch (matches the format used in localModelPub)
+        deviceKey = f"{deviceID}-{taskID}-{currentEpoch}"
+        localQuery = subprocess.Popen(args=['../commonComponent/interRun.sh query '+deviceKey], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
         outs, errs = localQuery.communicate(timeout=timeout)
         if localQuery.poll() == 0:
             localDetail = json.loads(outs.strip())
@@ -95,6 +106,19 @@ def simpleQuery(key):
         return outs.strip(), infoQuery.poll()
     else:
         print("*** Failed to query the info of " + str(key) + "! ***" + errs.strip())
+        return errs.strip(), infoQuery.poll()
+
+def simpleQuerySilent(key):
+    """
+    Use the only key to query info from fabric network (silent mode - no error printing).
+    This is useful when querying devices that may not exist yet, to avoid log spam.
+    """
+    infoQuery = subprocess.Popen(args=['../commonComponent/interRun.sh query '+key], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
+    outs, errs = infoQuery.communicate(timeout=15)
+    if infoQuery.poll() == 0:
+        return outs.strip(), infoQuery.poll()
+    else:
+        # Silently return error status without printing
         return errs.strip(), infoQuery.poll()
 
 
