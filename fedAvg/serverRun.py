@@ -142,7 +142,6 @@ def query_device_model(deviceID, taskID, currentEpoch, lock, received_devices, f
         print(f"Error querying {deviceID} model: {e}")
         return False
 
-
 def query_device_model_dag_style(deviceID, taskID, currentEpoch, lock, flagSet, w_locals, net_glob, dataset_test, args, aggModelAcc, timeout=15):
     """
     参考DAG方法的查询逻辑：查询单个设备模型（从Fabric）并下载模型文件（从IPFS）
